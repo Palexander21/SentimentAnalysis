@@ -1,15 +1,15 @@
 from selenium import webdriver
-from bs4 import BeautifulSoup as bs
+from bs4 import BeautifulSoup as Soup
 import requests as req
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
-from datetime import timedelta, date
+from datetime import datetime, timedelta, date
 import time
 import argparse
 import numpy as np
 from tabulate import tabulate
 
-from src.Symbol import Symbol
-from src.Constants import *
+from Symbol import Symbol
+from Constants import *
 
 
 def get_urls(driver, symbols):
@@ -17,7 +17,7 @@ def get_urls(driver, symbols):
         driver.get(SEARCH_URL.format(symbol))
         driver.implicitly_wait(100)
 
-        content = bs(driver.page_source, 'html5lib')
+        content = Soup(driver.page_source, 'html5lib')
         links = content.find_all('div', class_='dbsr')
         for l in links:
             a_tag = l.find_all('a', href=True)
@@ -25,23 +25,27 @@ def get_urls(driver, symbols):
                 symbols[symbol].urls.append(href['href'])
 
 
+def get_sentiments(url_, obj, timestamp):
+    response = req.get(url_, headers=HEADERS)
+    content = Soup(response.content, 'html5lib')
+    p_tag = content.find_all('p')
+    paragraph = ""
+    for sentence in p_tag:
+        paragraph += sentence.text
+    sentiment = SentimentIntensityAnalyzer().polarity_scores(paragraph)['compound']
+    obj.update_sentiment(timestamp, sentiment)
+    print('{}: {} {} [{}]'.format(timestamp, obj.symbol, url_, sentiment))
+
+
 def get_content(driver, symbols):
     for symbol in symbols.keys():
         for url_ in symbols[symbol].urls:
             time.sleep(1)
-            response = req.get(url_, headers=HEADERS)
-            content = bs(response.content, 'html5lib')
-            p_tag = content.find_all('p')
-            paragraph = ""
-            for sentence in p_tag:
-                paragraph += sentence.text
             today = date.today()
-            sentiment = SentimentIntensityAnalyzer().polarity_scores(paragraph)['compound']
-            symbols[symbol].update_sentiment(today, sentiment)
-            print('{}: {} - {} [{}]'.format(today, symbol, sentiment, url_))
+            get_sentiments(url_, symbols[symbol], today)
 
 
-def get_historical(driver, symbols, args):
+def get_historical(driver, args):
     year = timedelta(days=365)
     month = timedelta(days=30)
     today = date.today()
@@ -52,9 +56,31 @@ def get_historical(driver, symbols, args):
     else:
         delta = today - timedelta(weeks=args.date_val)
 
-    response = req.get(HISTORICAL_URL, headers=HEADERS)
-    content = bs(response, 'html5lib')
+    last_date = date.today()
+    links = []
+    dates = []
+    driver.get(HISTORICAL_URL.format(args.name))
+    driver.implicitly_wait(1000)
+    while last_date >= delta:
+        html = Soup(driver.page_source, 'html5lib')
+        links = html.select('h3 a', href=True)
+        dates = html.find_all('h5', class_='search-result-timestamp')
+        tmp_date = dates[-1].text.split()[0:3]
+        tmp_date = ' '.join(tmp_date)
+        last_date = datetime.strptime(tmp_date, '%B %d, %Y').date()
+        driver.find_element_by_css_selector('.search-result-more-txt').click()
+    stock = Symbol(args.symbol, args.name)
 
+    for url_, d in zip(links, dates):
+        article_list = d.text.split()[0:3]
+        article_str = ' '.join(article_list)
+        article_date = datetime.strptime(article_str, '%B %d, %Y').date()
+        if article_date < delta:
+            break
+        else:
+            time.sleep(1)
+            get_sentiments(REUTERS_ROOT.format(url_['href']), stock, article_date)
+    stock.report()
 
 
 def report(symbols):
@@ -69,9 +95,11 @@ def report(symbols):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--historical', action='store_true')
+    parser.add_argument('-H', '--historical', action='store_true', help='Search articles until specified date for a given stock')
     parser.add_argument('--date-type', action='store', dest='date_type', help="week, month, year, default=week", default='week', type=str)
     parser.add_argument('--date-value', action='store', dest='date_val', help="default=1", default=1, type=int)
+    parser.add_argument('-n', '--name', action='store', dest='name', help='Full company name, not symbol', type=str)
+    parser.add_argument('-s', '--symbol', action='store', dest='symbol', help='Stock symbol', type=str)
     args = parser.parse_args()
 
     driver = webdriver.Chrome()
@@ -79,10 +107,13 @@ if __name__ == '__main__':
     for s, n in zip(SYMBOLS, STOCKS):
         symbols[s] = Symbol(s, n)
     if args.historical:
-        get_historical(driver, symbols, args)
+        if args.name and args.symbol:
+            get_historical(driver, args)
+        else:
+            print('[Error]: -n and -s are required when -H is enabled')
     else:
         get_urls(driver, symbols)
         get_content(driver, symbols)
+        report(symbols)
     driver.close()
-    report(symbols)
 
