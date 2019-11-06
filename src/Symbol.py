@@ -22,3 +22,10 @@ class Symbol:
         for k, v in self.sentiments.items():
             data.append([k, self.symbol, np.mean(v), np.median(v), np.std(v)])
         print(tabulate(data, headers=headers))
+
+    def to_dict(self):
+        return {
+            'Symbol': self.symbol,
+            'Dates': self.sentiments.keys(),
+            'Sentiments': self.sentiments.values(),
+        }

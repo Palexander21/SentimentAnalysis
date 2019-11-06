@@ -1,8 +1,10 @@
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
+import nltk
 import csv
 import pandas as pd
 
 if __name__ == '__main__':
+    nltk.download('vader_lexicon')
     sia = SentimentIntensityAnalyzer()
 # stock market lexicon
     stock_lex = pd.read_csv('lexicon_data/stock_lex.csv')
