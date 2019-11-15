@@ -9,11 +9,13 @@ import argparse
 import numpy as np
 import pandas as pd
 try:
+    import pandas_datareader.data as web
     import matplotlib.pyplot as plt
 except ImportError:
     print("Failed to load matplotlib. Graphs will not be rendered")
 from tabulate import tabulate
 import sys
+import threading
 
 from Symbol import Symbol
 from Constants import *
@@ -52,17 +54,19 @@ def get_content(driver, symbols):
             get_sentiments(url_, symbols[symbol], today)
 
 
-def get_historical(driver, args):
-    year = timedelta(days=365)
-    month = timedelta(days=30)
+def get_time_delta(args):
     today = date.today()
     if args.date_type == 'year':
-        delta = today - timedelta(days=(args.date_val * year))
+        delta = today - timedelta(days=(args.date_val * 365))
     elif args.date_type == 'month':
-        delta = today - timedelta(days=(args.date_val * month))
+        delta = today - timedelta(days=(args.date_val * 30))
     else:
         delta = today - timedelta(weeks=args.date_val)
+    return delta
 
+
+def get_historical(driver, args):
+    delta = get_time_delta(args)
     last_date = date.today()
     links = []
     dates = []
@@ -76,6 +80,7 @@ def get_historical(driver, args):
         tmp_date = ' '.join(tmp_date)
         last_date = datetime.strptime(tmp_date, '%B %d, %Y').date()
         driver.find_element_by_css_selector('.search-result-more-txt').click()
+        time.sleep(0.5)
     stock = Symbol(args.symbol, args.name)
 
     for url_, d in zip(links, dates):
@@ -88,6 +93,9 @@ def get_historical(driver, args):
             time.sleep(1)
             get_sentiments(REUTERS_ROOT.format(url_['href']), stock, article_date)
     stock.report()
+    # stock.get_prices(delta, date.today())
+    # stock.plot()
+    return stock
 
 
 def report(symbols):
@@ -119,7 +127,7 @@ def to_dataframe(symbols):
     return df
 
 
-def plot(symbols):
+def plot_bar(symbols):
     df = to_dataframe(symbols)
     df.plot(kind='bar', y=['Mean', 'Median', 'StdDev'])
     plt.show()
@@ -128,8 +136,8 @@ def plot(symbols):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-H', '--historical', action='store_true', help='Search articles until specified date for a given stock')
-    parser.add_argument('--date-type', action='store', dest='date_type', help="week, month, year, default=week", default='week', type=str)
-    parser.add_argument('--date-value', action='store', dest='date_val', help="default=1", default=1, type=int)
+    parser.add_argument('-t', '--date-type', action='store', dest='date_type', help="week, month, year, default=week", default='week', type=str)
+    parser.add_argument('-V', '--date-value', action='store', dest='date_val', help="default=1", default=1, type=int)
     parser.add_argument('-n', '--name', action='store', dest='name', help='Full company name, not symbol', type=str)
     parser.add_argument('-s', '--symbol', action='store', dest='symbol', help='Stock symbol', type=str)
     parser.add_argument('-S', '--silent', action='store_true',  help='Run in headless mode')
@@ -143,20 +151,36 @@ if __name__ == '__main__':
     else:
         driver = webdriver.Chrome(chrome_options=chrome_options)
     symbols = {}
+    stock = {}
     for s, n in zip(SYMBOLS, STOCKS):
         symbols[s] = Symbol(s, n)
     if args.historical:
         if args.name and args.symbol:
-            get_historical(driver, args)
+            print("Starting to gather data, this may take a while...")
+            stock = get_historical(driver, args)
+            if sys.platform == 'linux':
+                stock.plot()
+            else:
+                stock.to_csv()
+            # t1 = threading.Thread(target=get_historical, args=(driver, args))
+            # t1.start()
+            # msg = "Scraping data"
+            # while t1.is_alive():
+            #     sys.stdout.write('\r%s' % msg)
+            #     sys.stdout.flush()
+            #     msg = msg + '.'
+            #     time.sleep(0.5)
+            # t1.join()
+
         else:
             print('[Error]: -n and -s are required when -H is enabled')
     else:
         get_urls(driver, symbols)
         get_content(driver, symbols)
         report(symbols)
+        if sys.platform == 'linux':
+            plot_bar(symbols)
+        else:
+            df = to_dataframe(symbols)
+            df.to_csv('data/data_{}.csv'.format(date.today()))
     driver.close()
-    if sys.platform == 'linux':
-        plot(symbols)
-    else:
-        df = to_dataframe(symbols)
-        df.to_csv('data/data_{}.csv'.format(date.today()))
